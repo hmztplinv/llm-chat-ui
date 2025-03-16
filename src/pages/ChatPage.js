@@ -1,98 +1,115 @@
 import React, { useState, useEffect } from 'react';
 
 const ChatPage = () => {
-  // conversationId’yi manuel belirleyebilirsiniz veya prop/route ile alabilirsiniz
-  const [conversationId, setConversationId] = useState(3);
+  // conversationId başlangıçta null veya undefined
+  const [conversationId, setConversationId] = useState(null);
 
-  // JWT token'i bir yerden almanız lazım (ör. login sonrası localStorage'a yazıldıysa)
-  const [token, setToken] = useState(localStorage.getItem('access_token') || '');
-
-  // Ekranda gösterilecek mesaj listesi
+  const [token] = useState(localStorage.getItem('access_token') || '');
   const [messages, setMessages] = useState([]);
-
-  // Kullanıcının input'a girdiği metin
   const [inputText, setInputText] = useState('');
 
-  // Sunucu URL (NET Core API). Portu kendi projenize göre ayarlayın.
   const API_BASE_URL = 'http://localhost:5195';
 
-  // useEffect: Bileşen yüklendiğinde veya conversationId/token değiştiğinde mesajları çek
+  // 1) Bileşen yüklendiğinde veya token değiştiğinde conversation ID bulalım
   useEffect(() => {
-    // Eğer token yoksa uyarı verebilir veya login ekranına yönlendirebilirsiniz
     if (!token) {
-      console.warn('No token found. Please log in first or set your token.');
+      console.warn('No token found, please login first.');
       return;
     }
-    if (conversationId) {
-      fetchMessages();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, conversationId]);
+    fetchOrCreateConversation();
+    // eslint-disable-next-line
+  }, [token]);
 
-  // 1) Mevcut mesajları sunucudan çekme fonksiyonu
-  const fetchMessages = async () => {
+  // Bu fonksiyon önce GET /api/conversations ile liste çeker,
+  // eğer boş ise POST /api/conversations ile yeni bir tane oluşturur.
+  const fetchOrCreateConversation = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/conversations/${conversationId}/messages`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      // Mevcut konuşmaları listele
+      const res = await fetch(`${API_BASE_URL}/api/conversations`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-
       if (!res.ok) {
-        console.error('Fetch messages error:', res.status, res.statusText);
+        console.error('Fetch conversations error:', res.statusText);
         return;
       }
+      const convData = await res.json();
+      if (convData.length > 0) {
+        // İlk conversation'ı seçelim (isterseniz bir listeyi user'a gösterip seçtirin)
+        setConversationId(convData[0].id);
+      } else {
+        // Hiç conversation yoksa yeni bir tane oluştur
+        const createRes = await fetch(`${API_BASE_URL}/api/conversations`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ topicTitle: 'My First Chat' })
+        });
+        if (!createRes.ok) {
+          console.error('Create conversation error:', createRes.statusText);
+          return;
+        }
+        const newConv = await createRes.json();
+        setConversationId(newConv.id);
+      }
+    } catch (err) {
+      console.error('fetchOrCreateConversation exception:', err);
+    }
+  };
 
+  // 2) Mesajları çekme fonksiyonu
+  const fetchMessages = async (convId) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/conversations/${convId}/messages`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        console.error('Fetch messages error:', res.statusText);
+        return;
+      }
       const data = await res.json();
-      setMessages(data); // DB’den gelen tüm mesajları ekrana yansıt
+      setMessages(data);
     } catch (err) {
       console.error('Fetch messages exception:', err);
     }
   };
 
-  // 2) Kullanıcı mesajını gönderme (POST)
-  const handleSend = async () => {
-    if (!inputText.trim()) return; // Boş mesaj göndermeyelim
-
-    // Token yoksa uyarı ver
-    if (!token) {
-      console.error('Cannot send message: No token found.');
-      return;
+  // conversationId değiştiğinde mesajları çek
+  useEffect(() => {
+    if (conversationId) {
+      fetchMessages(conversationId);
     }
+    // eslint-disable-next-line
+  }, [conversationId]);
+
+  // 3) Kullanıcı mesajı gönderme
+  const handleSend = async () => {
+    if (!inputText.trim() || !conversationId) return;
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/conversations/${conversationId}/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ content: inputText }),
+        body: JSON.stringify({ content: inputText })
       });
 
       if (!res.ok) {
-        console.error('Send message error:', res.status, res.statusText);
+        console.error('Send message error:', res.statusText);
         return;
       }
 
-      // Sunucudan { userMessage, assistantMessage } dönecek
+      // Sunucudan { userMessage, assistantMessage }
       const data = await res.json();
+      // user message
+      const userMsg = { role: 'user', content: data.userMessage };
+      // assistant message
+      const assistantMsg = { role: 'assistant', content: data.assistantMessage };
 
-      // User mesajı
-      const userMsg = {
-        role: 'user',
-        content: data.userMessage,
-      };
-      // Asistan mesajı
-      const assistantMsg = {
-        role: 'assistant',
-        content: data.assistantMessage,
-      };
-
-      // Ekrandaki message listesine ekle
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
-
-      // Input temizle
       setInputText('');
     } catch (err) {
       console.error('Send message exception:', err);
@@ -101,7 +118,7 @@ const ChatPage = () => {
 
   return (
     <div style={{ maxWidth: '600px', margin: 'auto', padding: '1rem' }}>
-      <h2>LLM Chat (Conversation {conversationId})</h2>
+      <h2>LLM Chat {conversationId && `(Conversation ${conversationId})`}</h2>
 
       <div style={{
         border: '1px solid #ccc',
